@@ -1,6 +1,6 @@
-const core = require("@actions/core");
-const yaml = require("yaml");
-const fs = require("fs").promises;
+import core from "@actions/core";
+import yaml from "js-yaml";
+import { promises as fs } from "fs";
 
 checkGenerateEntity();
 
