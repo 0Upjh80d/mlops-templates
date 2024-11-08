@@ -13,6 +13,6 @@
   "dependencies": {
     "@actions/core": "^1.11.1",
     "fs": "^0.0.1-security",
-    "yaml": "^2.6.0"
+    "js-yaml": "^4.1.0"
   }
 }
