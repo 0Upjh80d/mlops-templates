@@ -1,6 +1,6 @@
-import core from "@actions/core";
-import YAML from "yaml";
-import { promises as fs } from "fs";
+const core = require("@actions/core");
+const yaml = require("yaml");
+const fs = require("fs").promises;
 
 checkGenerateEntity();
 
@@ -11,7 +11,8 @@ try {
   } else {
     (async () => {
       const data = await fs.readFile(configData, "utf8");
-      const configYaml = YAML.parse(data);
+      const SCHEMA = yaml.FAILSAFE_SCHEMA;
+      const configYaml = yaml.load(data, { schema: SCHEMA });
 
       const { variables } = configYaml;
       const namespace = String(variables.namespace || "");
