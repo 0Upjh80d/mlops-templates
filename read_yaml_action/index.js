@@ -1,5 +1,5 @@
 import core from "@actions/core";
-import yaml from "js-yaml";
+import yaml from "js-yaml/index.js";
 import { promises as fs } from "fs";
 
 checkGenerateEntity();
