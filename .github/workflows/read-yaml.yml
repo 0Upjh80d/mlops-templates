@@ -1,0 +1,115 @@
+name: read-yaml
+
+on:
+  workflow_call:
+    inputs:
+      file_name:
+        required: true
+        type: string
+    outputs:
+      location:
+        description: "The location of the Azure resources."
+        value: ${{ jobs.read-yaml.outputs.location }}
+      namespace:
+        description: "The namespace for the Azure resources. Also known as the resource prefix."
+        value: ${{ jobs.read-yaml.outputs.namespace }}
+      postfix:
+        description: "The postfix for the Azure resources."
+        value: ${{ jobs.read-yaml.outputs.postfix }}
+      environment:
+        description: "The environment of the Azure Machine Learning Workspace. Typically, either dev or prod."
+        value: ${{ jobs.read-yaml.outputs.environment }}
+      enable_aml_computecluster:
+        description: "Whether to enable Azure Machine Learning Compute Cluster."
+        value: ${{ jobs.read-yaml.outputs.enable_aml_computecluster }}
+      enable_monitoring:
+        description: "Whether to enable Azure Machine Learning Workspace monitoring."
+        value: ${{ jobs.read-yaml.outputs.enable_monitoring }}
+
+      # Resource group and AML workspace
+      resource_group:
+        description: "The resource group for the Azure resources."
+        value: ${{ jobs.read-yaml.outputs.resource_group }}
+      aml_workspace:
+        description: "The Azure Machine Learning Workspace name."
+        value: ${{ jobs.read-yaml.outputs.aml_workspace }}
+
+      # Endpoint Names
+      bep:
+        description: "The batch endpoint name."
+        value: ${{ jobs.read-yaml.outputs.bep }}
+      oep:
+        description: "The online endpoint name."
+        value: ${{ jobs.read-yaml.outputs.oep }}
+
+      # Terraform-related configuration
+      terraform_version:
+        description: "The Terraform version."
+        value: ${{ jobs.read-yaml.outputs.terraform_version }}
+      terraform_workingdir:
+        description: "The working directory of the Terraform State."
+        value: ${{ jobs.read-yaml.outputs.terraform_workingdir }}
+      terraform_st_location:
+        description: "The location of the Terraform State."
+        value: ${{ jobs.read-yaml.outputs.terraform_st_location }}
+      terraform_st_resource_group:
+        description: "The Resource Group of the Terraform State."
+        value: ${{ jobs.read-yaml.outputs.terraform_st_resource_group }}
+      terraform_st_storage_account:
+        description: "The Azure Storage Account of the Terraform State."
+        value: ${{ jobs.read-yaml.outputs.terraform_st_storage_account }}
+      terraform_st_container_name:
+        description: "The container name of the Terraform State."
+        value: ${{ jobs.read-yaml.outputs.terraform_st_container_name }}
+      terraform_st_key:
+        description: "The storage key of the Terraform State."
+        value: ${{ jobs.read-yaml.outputs.terraform_st_key }}
+
+jobs:
+  read-yaml:
+    runs-on: ubuntu-latest
+    outputs:
+      location: ${{ steps.read-action-js.outputs.location }}
+      namespace: ${{ steps.read-action-js.outputs.namespace }}
+      postfix: ${{ steps.read-action-js.outputs.postfix }}
+      environment: ${{ steps.read-action-js.outputs.environment }}
+      enable_aml_computecluster: ${{ steps.read-action-js.outputs.enable_aml_computecluster }}
+      enable_monitoring: ${{ steps.read-action-js.outputs.enable_monitoring }}
+      resource_group: ${{ steps.read-action-js.outputs.resource_group }}
+      aml_workspace: ${{ steps.read-action-js.outputs.aml_workspace }}
+      bep: ${{ steps.read-action-js.outputs.bep }}
+      oep: ${{ steps.read-action-js.outputs.oep }}
+      terraform_version: ${{  steps.read-action-js.outputs.terraform_version }}
+      terraform_workingdir: ${{  steps.read-action-js.outputs.terraform_workingdir }}
+      terraform_st_location: ${{  steps.read-action-js.outputs.terraform_st_location }}
+      terraform_st_resource_group: ${{  steps.read-action-js.outputs.terraform_st_resource_group }}
+      terraform_st_storage_account: ${{  steps.read-action-js.outputs.terraform_st_storage_account }}
+      terraform_st_container_name: ${{  steps.read-action-js.outputs.terraform_st_container_name }}
+      terraform_st_key: ${{  steps.read-action-js.outputs.terraform_st_key }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Read YAML
+        uses: 0Upjh80d/mlops-templates/read_yaml_action@main
+        id: read-action-js
+        with:
+          config: ${{ github.workspace }}/${{ inputs.file_name }}
+
+      - name: Echo Outputs
+        run: |
+          echo "Location: ${{ steps.read-action-js.outputs.location }}"
+          echo "Namespace: ${{ steps.read-action-js.outputs.namespace }}"
+          echo "Postfix: ${{ steps.read-action-js.outputs.postfix }}"
+          echo "Environment: ${{ steps.read-action-js.outputs.environment }}"
+          echo "Resource Group: ${{ steps.read-action-js.outputs.resource_group }}"
+          echo "AML Workspace: ${{ steps.read-action-js.outputs.aml_workspace }}"
+          echo "Batch Endpoint: ${{ steps.read-action-js.outputs.bep }}"
+          echo "Online Endpoint: ${{ steps.read-action-js.outputs.oep }}"
+          echo "Terraform Version: ${{ steps.read-action-js.outputs.terraform_version }}"
+          echo "Terraform Working Directory: ${{ steps.read-action-js.outputs.terraform_workingdir }}"
+          echo "Terraform Resource Group: ${{ steps.read-action-js.outputs.terraform_st_resource_group }}"
+          echo "Terraform Storage Account: ${{ steps.read-action-js.outputs.terraform_st_storage_account }}"
+          echo "Terraform Container Name: ${{ steps.read-action-js.outputs.terraform_st_container_name }}"
+          echo "Terraform Key: ${{ steps.read-action-js.outputs.terraform_st_key }}"

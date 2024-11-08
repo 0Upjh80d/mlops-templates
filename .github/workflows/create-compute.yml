@@ -1,0 +1,90 @@
+name: create-compute
+
+on:
+  workflow_call:
+    inputs:
+      cluster_name:
+        required: true
+        type: string
+      size:
+        required: true
+        type: string
+      min_instances:
+        required: true
+        type: number
+      max_instances:
+        required: true
+        type: number
+      resource_group:
+        required: true
+        type: string
+      workspace_name:
+        required: true
+        type: string
+      cluster_tier:
+        required: false
+        type: string
+
+    secrets:
+      creds:
+        required: true
+
+jobs:
+  create-compute:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.creds }}
+          enable-AzPSSession: true
+
+      - name: Install or Update Azure ML Extension
+        run: |
+          az extension add -n ml -y || az extension update -n ml -y
+
+      # Step to check if the compute cluster already exists
+      - name: Check for Existing Compute Cluster
+        run: |
+          CLUSTER_EXISTS=$(az ml compute list \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }} \
+            --query "[?name=='${{ inputs.cluster_name }}'] | length(@)")
+          echo "CLUSTER_EXISTS=$CLUSTER_EXISTS" >> $GITHUB_ENV
+
+      # Conditionally create the default compute cluster if it doesn't exist
+      - name: Register Default Tier Compute
+        if: ${{ inputs.cluster_tier == '' && env.CLUSTER_EXISTS == '0' }}
+        run: |
+          echo "Creating default tier compute with cluster name: '${{ inputs.cluster_name }}', size: '${{ inputs.size }}', min instances: '${{ inputs.min_instances }}', and max instances: '${{ inputs.max_instances }}'"
+          az ml compute create \
+          az ml compute create \
+            --name ${{ inputs.cluster_name }} \
+            --type AmlCompute \
+            --size ${{ inputs.size }} \
+            --min-instances ${{ inputs.min_instances }} \
+            --max-instances ${{ inputs.max_instances }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }}
+          echo "Compute '${{ inputs.cluster_name }}' with default tier created successfully."
+
+      # Conditionally create the custom compute cluster if it doesn't exist
+      - name: Register Custom Tier Compute
+        if: ${{ inputs.cluster_tier != '' && env.CLUSTER_EXISTS == '0' }}
+        run: |
+          echo "Creating custom tier compute with cluster name: '${{ inputs.cluster_name }}', size: '${{ inputs.size }}', min instances: '${{ inputs.min_instances }}', and max instances: '${{ inputs.max_instances }}', tier: '${{ inputs.cluster_tier }}'"
+          az ml compute create \
+            --name ${{ inputs.cluster_name }} \
+            --type AmlCompute \
+            --tier ${{ inputs.cluster_tier }} \
+            --size ${{ inputs.size }} \
+            --min-instances ${{ inputs.min_instances }} \
+            --max-instances ${{ inputs.max_instances }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }}
+          echo "Compute '${{ inputs.cluster_name }}' with custom tier '${{ inputs.cluster_tier }}' created successfully."
+
+      # Skip creation if the compute cluster already exists
+      - name: Skip Creation
+        if: ${{ env.CLUSTER_EXISTS != '0' }}
+        run: echo "Compute cluster '${{ inputs.cluster_name }}' already exists. Skipping creation."

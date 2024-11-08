@@ -1,0 +1,114 @@
+name: register-environment
+
+on:
+  workflow_call:
+    inputs:
+      environment_file:
+        required: true
+        type: string
+      resource_group:
+        required: true
+        type: string
+      workspace_name:
+        required: true
+        type: string
+      conda_file:
+        required: false
+        default: ""
+        type: string
+      dockerfile-location:
+        required: false
+        default: ""
+        type: string
+
+    secrets:
+      creds:
+        required: true
+
+jobs:
+  register-environment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.creds }}
+          enable-AzPSSession: true
+
+      - name: Install or Update Azure ML Extension
+        run: |
+          az extension add -n ml -y || az extension update -n ml -y
+
+      # If both Conda file and Dockerfile are specified, error out
+      - name: Check for Conflicting Inputs
+        if: ${{ inputs.conda_file != '' && inputs.dockerfile-location != '' }}
+        run: |
+          echo "Error: Both Conda file or Dockerfile are specified. Please provide only one."
+          exit 1
+
+      # Calculate MD5 Hash of Conda File if specified
+      - name: Calculate MD5 Checksum of Conda File
+        if: ${{ inputs.conda_file != '' && inputs.dockerfile-location == '' }}
+        run: |
+          CONDA_HASH=$(md5sum "${{ github.workspace }}/${{ inputs.conda_file }}" | awk '{ print $1 }')
+          echo "CONFIG_HASH=$CONDA_HASH" >> $GITHUB_ENV
+
+      # Calculate MD5 Hash of Dockerfile if specified
+      - name: Calculate MD5 Checksum of Dockerfile
+        if: ${{ inputs.conda_file == '' && inputs.dockerfile-location != '' }}
+        run: |
+          DOCKER_HASH=$(md5sum "${{ github.workspace }}/${{ inputs.dockerfile-location }}" | awk '{ print $1 }')
+          echo "CONFIG_HASH=$DOCKER_HASH" >> $GITHUB_ENV
+
+      # Check for existing environment with the same hash
+      - name: Check for Existing Environment
+        run: |
+          ENV_EXISTS=$(az ml environment list \
+            --name ${{ inputs.environment_file }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }} \
+            --query "[?tags.CONFIG_HASH=='${{ env.CONFIG_HASH }}'] | length(@)")
+          echo "ENV_EXISTS=$ENV_EXISTS" >> $GITHUB_ENV
+
+      # Conditionally register environment with Conda file if no matching environment found and Conda file is specified
+      - name: Register Environment with Conda File
+        if: ${{ inputs.conda_file != '' && inputs.dockerfile-location == '' && env.ENV_EXISTS == '0' }}
+        run: |
+          echo "Registering environment with conda file: ${{ inputs.conda_file }}"
+          az ml environment create \
+            --file ${{ github.workspace }}/${{ inputs.environment_file }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }} \
+            --conda-file ${{ github.workspace }}/${{ inputs.conda_file }}
+          echo "Environment '${{ inputs.conda_file }}' registered successfully."
+
+      # Conditionally register environment with Dockerfile if no matching environment found and Dockerfile is specified
+      - name: Register Environment with Dockerfile
+        if: ${{ inputs.conda_file == '' && inputs.dockerfile-location != '' && env.ENV_EXISTS == '0' }}
+        run: |
+          echo "Registering environment with dockerfile: ${{ inputs.dockerfile-location }}"
+          az ml environment create \
+            --file ${{ github.workspace }}/${{ inputs.environment_file }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }} \
+            --build-context ${{ github.workspace }}/${{ inputs.dockerfile-location }}
+          echo "Environment '${{ inputs.dockerfile-location }}' registered successfully."
+
+      # Conditionally register environment without Conda File or Dockerfile if no matching environment found
+      - name: Register Environment without Conda File or Dockerfile
+        if: ${{ inputs.conda_file == '' && inputs.dockerfile-location == '' && env.ENV_EXISTS == '0' }}
+        run: |
+          echo "Registering environment without conda file or dockerfile"
+          az ml environment create \
+            --file ${{ github.workspace }}/${{ inputs.environment_file }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }}
+          echo "Environment '${{ inputs.environment_file }}' registered successfully."
+
+      # Skip registration if an environment with the same hash already exists
+      - name: Skip Registration
+        if: ${{ env.ENV_EXISTS != '0' }}
+        run: echo "Environment with the same MD5 checksum hash '${{ env.DATA_HASH }}' already exists. Skipping registration."

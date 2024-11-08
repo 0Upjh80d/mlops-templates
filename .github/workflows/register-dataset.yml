@@ -1,0 +1,102 @@
+name: register-dataset
+
+on:
+  workflow_call:
+    inputs:
+      data_file:
+        required: true
+        type: string
+      resource_group:
+        required: true
+        type: string
+      workspace_name:
+        required: true
+        type: string
+      file_type:
+        required: false
+        default: ""
+        type: string
+      name:
+        required: true
+        type: string
+
+    secrets:
+      creds:
+        required: true
+
+jobs:
+  register-dataset:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.creds }}
+          enable-AzPSSession: true
+
+      - name: Install or Update Azure ML Extension
+        run: |
+          az extension add -n ml -y || az extension update -n ml -y
+
+      # Step to parse the data file path from data_file (YAML file) and calculate its MD5 hash
+      - name: Calculate MD5 Checksum of Dataset File
+        id: calculate-hash
+        # 1. Extract the path to the actual data file from data_file (YAML) using grep and sed
+        # 2. Adjust the path based on the GitHub workspace structure
+        # 3. Calculate the MD5 hash of the actual data file and store it in an environment variable
+        run: |
+          DATA_PATH=$(grep 'path:' "${{ github.workspace }}/${{ inputs.data_file }}" | sed 's/.*path: \(\.\.\/\)*//')
+          FULL_DATA_PATH="${{ github.workspace }}/${DATA_PATH}"
+          DATA_HASH=$(md5sum "$FULL_DATA_PATH" | awk '{ print $1 }')
+          echo "DATA_HASH=$DATA_HASH" >> $GITHUB_ENV
+
+      # Check if a dataset with the same DATA_HASH tag already exists
+      - name: Check for Existing Dataset
+        # Query Azure ML for existing datasets with the specified name and hash tag
+        run: |
+          DATASET_EXISTS=$(az ml data list \
+            --name ${{ inputs.name }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }} \
+            --query "[?tags.DATA_HASH=='${{ env.DATA_HASH }}'] | length(@)")
+          echo "DATASET_EXISTS=$DATASET_EXISTS" >> $GITHUB_ENV
+
+      # The difference between registering dataset from file and registering dataset as a job
+      # is the definition of the data_file (usually a YAML file with a defined schema). In the former case,
+      # the schema specifies a simple dataset, usually an existing dataset without the need for further
+      # transformation or modification. Whereas, in the latter case, the schema specifies a slightly more
+      # complex dataset where a job can be created to processes data before registration, allowing for
+      # transformations and preprocessing — the command for preprocess is defined in the YAML file.
+
+      # Conditionally register the dataset only if no existing dataset with the same hash is found
+      - name: Register Dataset from File
+        if: ${{ inputs.file_type == '' && env.DATASET_EXISTS == '0' }}
+        run: |
+          echo "Registering dataset from file: ${{ inputs.data_file }}"
+          az ml dataset create \
+            --file ${{ github.workspace }}/${{ inputs.data_file }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }} \
+            --name ${{ inputs.name }} \
+            --tags DATA_HASH=${{ env.DATA_HASH }}
+          echo "Dataset '${{ inputs.name }}' registered successfully."
+
+      # Conditionally create the job only if no existing dataset with the same hash is found
+      - name: Register Dataset as Job
+        if: ${{ inputs.file_type != '' && env.DATASET_EXISTS == '0' }}
+        run: |
+          echo "Registering dataset as a job with file type: ${{ inputs.file_type }}"
+          az ml job create \
+            --file ${{ github.workspace }}/${{ inputs.data_file }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }} \
+            --tags DATA_HASH=${{ env.DATA_HASH }}
+          echo "Job created successfully with file: ${{ inputs.data_file }}"
+
+      # Skip registration if the dataset with the same hash already exists
+      - name: Skip Registration
+        if: ${{ env.DATASET_EXISTS != '0' }}
+        run: echo "Dataset with the same MD5 checksum hash '${{ env.DATA_HASH }}' already exists. Skipping registration."
