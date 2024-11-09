@@ -76,7 +76,7 @@ jobs:
         if: ${{ inputs.file_type == '' && env.DATASET_EXISTS == '0' }}
         run: |
           echo "Registering dataset from file: ${{ inputs.data_file }}"
-          az ml dataset create \
+          az ml data create \
             --file ${{ github.workspace }}/${{ inputs.data_file }} \
             --resource-group ${{ inputs.resource_group }} \
             --workspace-name ${{ inputs.workspace_name }} \
