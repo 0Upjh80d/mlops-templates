@@ -108,6 +108,24 @@ jobs:
             --workspace-name ${{ inputs.workspace_name }}
           echo "Environment '${{ inputs.environment_file }}' registered successfully."
 
+      # Retrieve latest environment version and add tag after registration
+      - name: Add Tag to Environment
+        if: ${{ env.ENV_EXISTS == '0' }}
+        run: |
+          echo "Fetching the latest version of environment '${{ inputs.environment_file }}' to add tag."
+          ENV_VERSION=$(az ml environment list --name ${{ inputs.environment_file }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }} \
+            --query "[].version | max(@)" -o tsv)
+          echo "Adding tag: 'CONFIG_HASH=${{ env.CONFIG_HASH }}' to environment: '${{ inputs.environment_file }}' version ${ENV_VERSION}."
+          az ml environment update \
+            --name ${{ inputs.environment_file }} \
+            --version $ENV_VERSION \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }} \
+            --set tags.CONFIG_HASH=${{ env.CONFIG_HASH }}
+          echo "Tag: 'CONFIG_HASH=${{ env.CONFIG_HASH }}' added to environment '${{ inputs.environment_file }}' version ${ENV_VERSION}."
+
       # Skip registration if an environment with the same hash already exists
       - name: Skip Registration
         if: ${{ env.ENV_EXISTS != '0' }}
