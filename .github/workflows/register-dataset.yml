@@ -61,7 +61,7 @@ jobs:
             --name ${{ inputs.name }} \
             --resource-group ${{ inputs.resource_group }} \
             --workspace-name ${{ inputs.workspace_name }} \
-            --query "[?tags.DATA_HASH=='${{ env.DATA_HASH }}'] | length(@)")
+            --query "[?tags.DATA_HASH=='${{ env.DATA_HASH }}'] | length(@)" || echo "0")
           echo "DATASET_EXISTS=$DATASET_EXISTS" >> $GITHUB_ENV
 
       # The difference between registering dataset from file and registering dataset as a job

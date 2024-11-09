@@ -70,7 +70,7 @@ jobs:
             --name ${{ inputs.environment_file }} \
             --resource-group ${{ inputs.resource_group }} \
             --workspace-name ${{ inputs.workspace_name }} \
-            --query "[?tags.CONFIG_HASH=='${{ env.CONFIG_HASH }}'] | length(@)")
+            --query "[?tags.CONFIG_HASH=='${{ env.CONFIG_HASH }}'] | length(@)" || echo "0")
           echo "ENV_EXISTS=$ENV_EXISTS" >> $GITHUB_ENV
 
       # Conditionally register environment with Conda file if no matching environment found and Conda file is specified
