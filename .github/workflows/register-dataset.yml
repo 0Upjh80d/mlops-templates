@@ -80,9 +80,20 @@ jobs:
             --file ${{ github.workspace }}/${{ inputs.data_file }} \
             --resource-group ${{ inputs.resource_group }} \
             --workspace-name ${{ inputs.workspace_name }} \
-            --name ${{ inputs.name }} \
-            --tags DATA_HASH=${{ env.DATA_HASH }}
+            --name ${{ inputs.name }}
           echo "Dataset '${{ inputs.name }}' registered successfully."
+     
+      # Add tag to the newly registered dataset
+      - name: Add Tag to Dataset
+        if: ${{ inputs.file_type == '' && env.DATASET_EXISTS == '0' }}
+        run: |
+          echo "Adding tag: 'DATA_HASH=${{ env.DATA_HASH }}' to dataset: '${{ inputs.name }}'."
+          az ml data update \
+            --name ${{ inputs.name }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }} \
+            --set tags.DATA_HASH=${{ env.DATA_HASH }}
+          echo "Tag: 'DATA_HASH=${{ env.DATA_HASH }}' added to dataset: '${{ inputs.name }}'."
 
       # Conditionally create the job only if no existing dataset with the same hash is found
       - name: Register Dataset as Job
@@ -92,9 +103,41 @@ jobs:
           az ml job create \
             --file ${{ github.workspace }}/${{ inputs.data_file }} \
             --resource-group ${{ inputs.resource_group }} \
-            --workspace-name ${{ inputs.workspace_name }} \
-            --tags DATA_HASH=${{ env.DATA_HASH }}
+            --workspace-name ${{ inputs.workspace_name }}
+          echo "JOB_ID=$JOB_ID" >> $GITHUB_ENV
           echo "Job created successfully with file: ${{ inputs.data_file }}"
+
+      # Wait for the job to complete
+      - name: Wait for Job Completion
+        if: ${{ inputs.file_type != '' && env.DATASET_EXISTS == '0' }}
+        run: |
+          echo "Waiting for job completion: ${{ env.JOB_ID }}"
+          az ml job wait \
+            --name ${{ env.JOB_ID }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }}
+
+      # Retrieve the output dataset ID from the job, assuming the job outputs a dataset
+      - name: Get Output Dataset ID
+        if: ${{ inputs.file_type != '' && env.DATASET_EXISTS == '0' }} 
+        run: |
+          OUTPUT_DATASET_ID=$(az ml job show --name ${{ env.JOB_ID }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }} \
+            --query "outputs.processed_data.uri" -o tsv)
+          echo "OUTPUT_DATASET_ID=$OUTPUT_DATASET_ID" >> $GITHUB_ENV
+
+      # Add tags to the output dataset created by the job
+      - name: Add Tag to Output Dataset
+        if: ${{ inputs.file_type != '' && env.DATASET_EXISTS == '0' && env.OUTPUT_DATASET_ID != '' }}
+        run: |
+          echo "Adding tag: 'DATA_HASH=${{ env.DATA_HASH }}' to output dataset: ${{ env.OUTPUT_DATASET_ID }}"
+          az ml data update \
+            --ids ${{ env.OUTPUT_DATASET_ID }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }} \
+            --set tags.DATA_HASH=${{ env.DATA_HASH }}
+          echo "Tag: 'DATA_HASH=${{ env.DATA_HASH }}' added to output dataset."
 
       # Skip registration if the dataset with the same hash already exists
       - name: Skip Registration
