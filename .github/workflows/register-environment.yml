@@ -1,0 +1,157 @@
+name: register-environment
+
+on:
+  workflow_call:
+    inputs:
+      environment_file:
+        required: true
+        type: string
+      resource_group:
+        required: true
+        type: string
+      workspace_name:
+        required: true
+        type: string
+      conda_file:
+        required: false
+        default: ""
+        type: string
+      dockerfile_location:
+        required: false
+        default: ""
+        type: string
+
+    secrets:
+      creds:
+        required: true
+
+jobs:
+  register-environment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.creds }}
+          enable-AzPSSession: true
+
+      - name: Install or Update Azure ML Extension
+        run: |
+          az extension add -n ml -y || az extension update -n ml -y
+
+      # If both Conda file and Dockerfile are specified, error out
+      - name: Check for Conflicting Inputs
+        if: ${{ inputs.conda_file != '' && inputs.dockerfile_location != '' }}
+        run: |
+          echo "Error: Both Conda file or Dockerfile are specified. Please provide only one."
+          exit 1
+
+      # Calculate MD5 Hash of Conda File or Dockerfile
+      - name: Calculate MD5 Checksum
+        run: |
+          if [[ "${{ inputs.conda_file }}" != "" ]]; then
+            HASH=$(md5sum "${{ github.workspace}}/${{ inputs.conda_file }}" | awk '{ print $1 }')
+          elif [[ "${{ inputs.dockerfile_location }}" != "" ]]; then
+            HASH=$(md5sum "${{ github.workspace }}/${{ inputs.dockerfile_location }}" | awk '{ print $1 }')
+          else
+            HASH=""
+          fi
+          echo "CONFIG_HASH=$HASH" >> $GITHUB_ENV
+
+      # Get Environment Name from environment_file
+      - name: Get Environment Name
+        # 1. Extract the name of the environment from environment_file (YAML) using grep and sed
+        # 2. Export the environment name to an environment variable
+        run: |
+          ENV_NAME=$(grep 'name:' "${{ github.workspace }}/${{ inputs.environment_file }}" | sed 's/.*name: \(\.\.\/\)*//')
+          echo "ENV_NAME=$ENV_NAME" >> $GITHUB_ENV
+
+      # Determine Action for Environment
+      - name: Determine Action for Environment
+        # Step 1: List versions of the environment by name
+        # Step 2: Identify the latest version
+        # Step 3: Query the latest version’s details
+        # Step 4: Decide action based on CONFIG_HASH
+        run: |
+          ACTION="create"
+
+          EXISTING_VERSIONS=$(az ml environment list \
+            --name "$ENV_NAME" \
+            --resource-group "${{ inputs.resource_group }}" \
+            --workspace-name "${{ inputs.workspace_name }}" \
+            --query "[].version" -o tsv | sort -n)
+
+          if [[ -z "$EXISTING_VERSIONS" ]]; then
+            echo "No existing environment found. Setting action to 'create'."
+            ACTION="create"
+          else
+            LATEST_VERSION=$(echo "$EXISTING_VERSIONS" | tail -n 1)
+            echo "Latest version found: $LATEST_VERSION"
+
+            EXISTING_HASH=$(az ml environment show \
+              --name "$ENV_NAME" \
+              --version "$LATEST_VERSION" \
+              --resource-group "${{ inputs.resource_group }}" \
+              --workspace-name "${{ inputs.workspace_name }}" \
+              --query "tags.CONFIG_HASH" -o tsv)
+
+            if [[ "$EXISTING_HASH" == "${{ env.CONFIG_HASH }}" ]]; then
+              echo "Matching 'CONFIG_HASH=${{ env.CONFIG_HASH }}' found. Setting action to 'skip'."
+              ACTION="skip"
+              echo "Environment with the same MD5 checksum hash '${{ env.CONFIG_HASH }}' already exists. Skipping registration."
+            else
+              echo "Different 'CONFIG_HASH=${{ env.CONFIG_HASH }}' found. Setting action to 'increment'."
+              ACTION="increment"
+              NEW_VERSION=$((LATEST_VERSION + 1))
+              echo "Incrementing to new version: '$NEW_VERSION'."
+              echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+            fi
+          fi
+          echo "ACTION=$ACTION" >> $GITHUB_ENV
+
+      # Conditionally register environment
+      - name: Register Environment
+        if: ${{ env.ACTION == 'create' || env.ACTION == 'increment' }}
+        run: |
+          if [[ "${{ env.ACTION }}" == "increment" ]]; then
+            VERSION="${{ env.NEW_VERSION }}"
+            echo "Incrementing environment version for '$ENV_NAME' to version '$VERSION'."
+          else
+            VERSION=1
+            echo "Creating a new environment '$ENV_NAME' with version '$VERSION'."
+          fi
+
+          if [[ "${{ inputs.conda_file }}" != "" ]]; then
+            az ml environment create \
+              --name "$ENV_NAME" \
+              --version "$VERSION" \
+              --resource-group "${{ inputs.resource_group }}" \
+              --workspace-name "${{ inputs.workspace_name }}" \
+              --conda-file "${{ github.workspace }}/${{ inputs.conda_file }}"
+          elif [[ "${{ inputs.dockerfile_location }}" != "" ]]; then
+            az ml environment create \
+              --name "$ENV_NAME" \
+              --version "$VERSION" \
+              --resource-group "${{ inputs.resource_group }}" \
+              --workspace-name "${{ inputs.workspace_name }}" \
+              --build-context "${{ github.workspace }}/${{ inputs.dockerfile_location }}"
+          else
+            az ml environment create \
+              --name "$ENV_NAME" \
+              --version "$VERSION" \
+              --resource-group "${{ inputs.resource_group }}" \
+              --workspace-name "${{ inputs.workspace_name }}"
+          fi
+
+          echo "Environment '${{ env.ENV_NAME }}' version '$VERSION' registered successfully."
+          echo "Adding tag: 'CONFIG_HASH=${{ env.CONFIG_HASH }}' to environment: '${{ env.ENV_NAME }}'."
+          az ml environment update \
+            --name "$ENV_NAME" \
+            --version "$VERSION" \
+            --resource-group "${{ inputs.resource_group }}" \
+            --workspace-name "${{ inputs.workspace_name }}" \
+            --set tags.CONFIG_HASH="${{ env.CONFIG_HASH }}"
+          echo "Tag: 'CONFIG_HASH=${{ env.CONFIG_HASH }}' added to environment '${{ env.ENV_NAME }}'."

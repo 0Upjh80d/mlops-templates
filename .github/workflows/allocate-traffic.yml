@@ -1,0 +1,86 @@
+name: allocation-traffic
+
+on:
+  workflow_call:
+    inputs:
+      endpoint_file:
+        required: true
+        type: string
+      endpoint_postfix:
+        required: true
+        type: string
+      traffic_allocation:
+        required: true
+        type: string
+      resource_group:
+        required: true
+        type: string
+      workspace_name:
+        required: true
+        type: string
+
+    secrets:
+      creds:
+        required: true
+
+jobs:
+  create-deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.creds }}
+          enable-AzPSSession: true
+
+      - name: Install or Update Azure ML Extension
+        run: |
+          az extension add -n ml -y || az extension update -n ml -y
+
+      - name: Get Deployment Name
+        # 1. Extract the name of the deployment from endpoint_file (YAML) using grep and sed
+        # 2. Export the deployment name to an environment variable
+        run: |
+          DEPLOYMENT_NAME=$(grep '^name:' "${{ github.workspace }}/${{ inputs.endpoint_file }}" | sed 's/.*name: \(\.\.\/\)*//')
+          ENDPOINT_NAME=$(grep 'endpoint_name:' "${{ github.workspace }}/${{ inputs.endpoint_file }}" | sed 's/.*name: \(\.\.\/\)*//')
+          echo "DEPLOYMENT_NAME=$DEPLOYMENT_NAME" >> $GITHUB_ENV
+          echo "ENDPOINT_NAME=$ENDPOINT_NAME" >> $GITHUB_ENV
+
+      # Wait for the deployment to reach a successful state
+      - name: Wait for Deployment to Succeed
+        # Loop to check the status every 30 seconds
+        run: |
+          STATUS=""
+          while true; do
+            STATUS=$(az ml online-deployment show \
+              --name "$DEPLOYMENT_NAME" \
+              --endpoint-name "${ENDPOINT_NAME}-${{ inputs.endpoint_postfix }}" \
+              --resource-group ${{ inputs.resource_group }} \
+              --workspace-name ${{ inputs.workspace_name }} \
+              --query "provisioning_state" -o tsv)
+            echo "Current status: $STATUS"
+            if [[ "$STATUS" == "Creating" || "$STATUS" == "Updating" || "$STATUS" == "Scaling" ]]; then
+              echo "Deployment is still in progress, waiting..."
+              sleep 30
+            elif [[ "$STATUS" == "Succeeded" ]]; then
+              echo "Deployment succeeded."
+              break
+            elif [[ "$STATUS" == "Failed" ]]; then
+              echo "Deployment failed."
+              exit 1
+            else
+              echo "Unexpected status: $STATUS"
+              exit 1
+            fi
+          done
+
+      - name: Allocate Traffic
+        run: |
+          az ml online-endpoint update \
+            --name "${ENDPOINT_NAME}-${{ inputs.endpoint_postfix }}" \
+            --traffic "$DEPLOYMENT_NAME=${{ inputs.traffic_allocation }}" \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }}

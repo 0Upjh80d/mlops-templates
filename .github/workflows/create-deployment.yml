@@ -1,0 +1,80 @@
+name: create-deployment
+
+on:
+  workflow_call:
+    inputs:
+      endpoint_file:
+        required: true
+        type: string
+      endpoint_postfix:
+        required: true
+        type: string
+      endpoint_type:
+        required: true
+        type: string
+      resource_group:
+        required: true
+        type: string
+      workspace_name:
+        required: true
+        type: string
+
+    secrets:
+      creds:
+        required: true
+
+jobs:
+  create-deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.creds }}
+          enable-AzPSSession: true
+
+      - name: Install or Update Azure ML Extension
+        run: |
+          az extension add -n ml -y || az extension update -n ml -y
+
+      - name: Get Deployment Name
+        # 1. Extract the name of the deployment from deployment_file (YAML) using grep and sed
+        # 2. Export the deployment name to an environment variable
+        run: |
+          DEPLOYMENT_NAME=$(grep '^name:' "${{ github.workspace }}/${{ inputs.endpoint_file }}" | sed 's/.*name: \(\.\.\/\)*//')
+          ENDPOINT_NAME=$(grep 'endpoint_name:' "${{ github.workspace }}/${{ inputs.endpoint_file }}" | sed 's/.*name: \(\.\.\/\)*//')
+          echo "DEPLOYMENT_NAME=$DEPLOYMENT_NAME" >> $GITHUB_ENV
+          echo "ENDPOINT_NAME=$ENDPOINT_NAME" >> $GITHUB_ENV
+
+      # Check if the deployment already exists
+      - name: Check if Deployment Exists
+        run: |
+          az ml ${{ inputs.endpoint_type }}-deployment show \
+            --name "$DEPLOYMENT_NAME" \
+            --endpoint-name "${ENDPOINT_NAME}-${{ inputs.endpoint_postfix }}" \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }} \
+            --output none && echo "DEPLOYMENT_EXISTS=true" >> $GITHUB_ENV || echo "DEPLOYMENT_EXISTS=false" >> $GITHUB_ENV
+
+      - name: Create Deployment
+        if: env.DEPLOYMENT_EXISTS == 'false'
+        run: |
+          az ml ${{ inputs.endpoint_type }}-deployment create \
+            --name "$DEPLOYMENT_NAME" \
+            --endpoint "${ENDPOINT_NAME}-${{ inputs.endpoint_postfix }}" \
+            -f ${{ github.workspace }}/${{ inputs.endpoint_file }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }}
+
+      - name: Update Deployment
+        if: env.DEPLOYMENT_EXISTS == 'true'
+        # az ml ${{ inputs.endpoint_type }}-deployment update \
+        #   --name "$DEPLOYMENT_NAME" \
+        #   --endpoint "${ENDPOINT_NAME}-${{ inputs.endpoint_postfix }}" \
+        #   -f ${{ github.workspace }}/${{ inputs.endpoint_file }} \
+        #   --resource-group ${{ inputs.resource_group }} \
+        #   --workspace-name ${{ inputs.workspace_name }}
+        run: echo "Deployment exists."

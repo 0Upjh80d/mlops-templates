@@ -1,0 +1,95 @@
+name: run-pipeline
+
+on:
+  workflow_call:
+    inputs:
+      parameters_file:
+        required: true
+        type: string
+      resource_group:
+        required: true
+        type: string
+      workspace_name:
+        required: true
+        type: string
+      job_name:
+        required: true
+        type: string
+
+    secrets:
+      creds:
+        required: true
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    outputs:
+      run_id: ${{ steps.run-ml-pipeline-job.outputs.run_id }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.creds }}
+          enable-AzPSSession: true
+
+      - name: Install or Update Azure ML Extension
+        run: |
+          az extension add -n ml -y || az extension update -n ml -y
+
+      - name: Run ML Pipeline Job
+        id: run-ml-pipeline-job
+        run: |
+          echo "Starting ML pipeline job with parameters file: '${{ inputs.parameters_file }}'."
+          run_id=$(az ml job create --file ${{ github.workspace }}/${{ inputs.parameters_file }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }} \
+            --query name -o tsv)
+
+          if [[ -z "$run_id" ]]; then
+            echo "Job creation failed."
+            exit 3
+          fi
+
+          echo "Job created with ID: '$run_id'."
+          echo "run_id=$run_id" >> $GITHUB_OUTPUT
+
+      - name: Monitor Job Status
+        run: |
+          echo "Fetching job status for run ID: '${{ steps.run-ml-pipeline-job.outputs.run_id }}'."
+          az ml job show \
+            -n ${{ steps.run-ml-pipeline-job.outputs.run_id }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }} \
+            --web
+
+          status=$(az ml job show -n ${{ steps.run-ml-pipeline-job.outputs.run_id }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }} \
+            --query status -o tsv)
+
+          if [[ -z "$status" ]]; then
+            echo "Failed to retrieve job status."
+            exit 4
+          fi
+
+          echo "Job is currently in status: '$status'."
+
+          while [[ "$status" == "NotStarted" || "$status" == "Queued" || "$status" == "Starting" || "$status" == "Preparing" || "$status" == "Running" || "$status" == "Finalizing" || "$status" == "CancelRequested" ]]; do
+            sleep 15
+            status=$(az ml job show -n ${{ steps.run-ml-pipeline-job.outputs.run_id }} \
+              --resource-group ${{ inputs.resource_group }} \
+              --workspace-name ${{ inputs.workspace_name }} \
+              --query status -o tsv)
+            echo "Current job status: '$status'."
+          done
+
+          if [[ "$status" == "Completed" ]]; then
+            echo "Job completed successfully."
+          else
+            echo "Job failed or was canceled. Final status: '$status'."
+            exit 3
+          fi

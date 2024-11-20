@@ -1,0 +1,181 @@
+name: register-dataset
+
+on:
+  workflow_call:
+    inputs:
+      data_file:
+        required: true
+        type: string
+      resource_group:
+        required: true
+        type: string
+      workspace_name:
+        required: true
+        type: string
+      file_type:
+        required: false
+        default: ""
+        type: string
+
+    secrets:
+      creds:
+        required: true
+
+jobs:
+  register-dataset:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.creds }}
+          enable-AzPSSession: true
+
+      - name: Install or Update Azure ML Extension
+        run: |
+          az extension add -n ml -y || az extension update -n ml -y
+
+      # Step to parse the data file path from data_file (YAML file) and calculate its MD5 hash
+      - name: Calculate MD5 Checksum of Dataset File
+        # 1. Extract the path to the actual data file from data_file (YAML) using grep and sed
+        # 2. Adjust the path based on the GitHub workspace structure
+        # 3. Calculate the MD5 hash of the actual data file and store it in an environment variable
+        run: |
+          DATA_PATH=$(grep 'path:' "${{ github.workspace }}/${{ inputs.data_file }}" | sed 's/.*path: \(\.\.\/\)*//')
+          FULL_DATA_PATH="${{ github.workspace }}/$DATA_PATH"
+          DATA_HASH=$(md5sum "$FULL_DATA_PATH" | awk '{ print $1 }')
+          echo "DATA_HASH=$DATA_HASH" >> $GITHUB_ENV
+
+      - name: Get Dataset Name
+        # 1. Extract the name of the dataset from data_file (YAML) using grep and sed
+        # 2. Export the dataset name to an environment variable
+        run: |
+          DATASET_NAME=$(grep 'name:' "${{ github.workspace }}/${{ inputs.data_file }}" | sed 's/.*name: \(\.\.\/\)*//')
+          echo "DATASET_NAME=$DATASET_NAME" >> $GITHUB_ENV
+
+      # Determine Action for Dataset
+      - name: Determine Action for Dataset
+        # Step 1: List versions of the dataset by name
+        # Step 2: Identify the latest version
+        # Step 3: Query the latest version’s details
+        # Step 4: Decide action based on DATA_HASH
+        run: |
+          ACTION="create"
+
+          EXISTING_VERSIONS=$(az ml data list \
+            --name "$DATASET_NAME" \
+            --resource-group "${{ inputs.resource_group }}" \
+            --workspace-name "${{ inputs.workspace_name }}" \
+            --query "[].version" -o tsv | sort -n)
+
+          if [[ -z "$EXISTING_VERSIONS" ]]; then
+            echo "No existing dataset found. Setting action to 'create'."
+            ACTION="create"
+          else
+            LATEST_VERSION=$(echo "$EXISTING_VERSIONS" | tail -n 1)
+            echo "Latest version found: $LATEST_VERSION."
+
+            EXISTING_HASH=$(az ml data show \
+              --name "$DATASET_NAME" \
+              --version "$LATEST_VERSION" \
+              --resource-group "${{ inputs.resource_group }}" \
+              --workspace-name "${{ inputs.workspace_name }}" \
+              --query "tags.DATA_HASH" -o tsv)
+            
+            if [[ "$EXISTING_HASH" == "${{ env.DATA_HASH }}" ]]; then
+              echo "Matching 'DATA_HASH=${{ env.DATA_HASH }}' found. Setting action to 'skip'."
+              ACTION="skip"
+              echo "Dataset with the same MD5 checksum hash '${{ env.DATA_HASH }}' already exists. Skipping registration."
+            else
+              echo "Different 'DATA_HASH=${{ env.DATA_HASH }}' found. Setting action to 'increment'."
+              ACTION="increment"
+              NEW_VERSION=$((LATEST_VERSION + 1))
+              echo "Incrementing to new version: '$NEW_VERSION'."
+              echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+            fi
+          fi
+          echo "ACTION=$ACTION" >> $GITHUB_ENV
+
+      # The difference between registering dataset from file and registering dataset as a job
+      # is the definition of the data_file (usually a YAML file with a defined schema). In the former case,
+      # the schema specifies a simple dataset, usually an existing dataset without the need for further
+      # transformation or modification. Whereas, in the latter case, the schema specifies a slightly more
+      # complex dataset where a job can be created to processes data before registration, allowing for
+      # transformations and preprocessing — the command for preprocess is defined in the YAML file.
+
+      # Conditionally register the dataset
+      - name: Register Dataset from File
+        if: ${{ env.ACTION == 'create' || env.ACTION == 'increment' && inputs.file_type == '' }}
+        run: |
+          if [[ "${{ env.ACTION }}" == "increment" ]]; then
+            VERSION="${{ env.NEW_VERSION }}"
+            echo "Incrementing dataset version for '$DATASET_NAME' to version '$VERSION'."
+          else
+            VERSION=1
+            echo "Creating a new dataset '$DATASET_NAME' with version '$VERSION'."
+          fi
+
+          az ml data create \
+            --file ${{ github.workspace }}/${{ inputs.data_file }} \
+            --resource-group "${{ inputs.resource_group }}" \
+            --workspace-name "${{ inputs.workspace_name }}" \
+            --name "$DATASET_NAME" \
+            --version "$VERSION"
+
+          echo "Dataset '${{ env.DATASET_NAME }}' version '$VERSION' registered successfully."
+          echo "Adding tag: 'DATA_HASH=${{ env.DATA_HASH }}' to dataset: '${{ env.DATASET_NAME }}'."
+
+          az ml data update \
+            --name "$DATASET_NAME" \
+            --version "$VERSION" \
+            --resource-group "${{ inputs.resource_group }}" \
+            --workspace-name "${{ inputs.workspace_name }}" \
+            --set tags.DATA_HASH="${{ env.DATA_HASH }}"
+
+      # Conditionally register the dataset as a job
+      - name: Register Dataset as Job
+        if: ${{ inputs.file_type != '' && env.ACTION == 'create' }}
+        run: |
+          echo "Registering dataset as a job with file type: ${{ inputs.file_type }}"
+          JOB_ID=$(az ml job create \
+            --file ${{ github.workspace }}/${{ inputs.data_file }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }} \
+            --query "id" -o tsv)
+          echo "JOB_ID=$JOB_ID" >> $GITHUB_ENV
+          echo "Job created successfully with file: ${{ inputs.data_file }}"
+
+      # Wait for the job to complete
+      - name: Wait for Job Completion
+        if: ${{ inputs.file_type != '' && env.ACTION == 'create' }}
+        run: |
+          echo "Waiting for job completion: ${{ env.JOB_ID }}"
+          az ml job wait \
+            --name ${{ env.JOB_ID }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }}
+
+      # Retrieve the output dataset ID from the job
+      - name: Get Output Dataset ID
+        if: ${{ inputs.file_type != '' && env.ACTION == 'create' }}
+        run: |
+          OUTPUT_DATASET_ID=$(az ml job show --name ${{ env.JOB_ID }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }} \
+            --query "outputs.processed_data.uri" -o tsv)
+          echo "OUTPUT_DATASET_ID=$OUTPUT_DATASET_ID" >> $GITHUB_ENV
+
+      # Add tags to the output dataset created by the job
+      - name: Add Tag to Output Dataset
+        if: ${{ inputs.file_type != '' && env.ACTION == 'create' && env.OUTPUT_DATASET_ID != '' }}
+        run: |
+          echo "Adding tag: 'DATA_HASH=${{ env.DATA_HASH }}' to output dataset: ${{ env.OUTPUT_DATASET_ID }}"
+          az ml data update \
+            --ids ${{ env.OUTPUT_DATASET_ID }} \
+            --resource-group ${{ inputs.resource_group }} \
+            --workspace-name ${{ inputs.workspace_name }} \
+            --set tags.DATA_HASH=${{ env.DATA_HASH }}
+          echo "Tag: 'DATA_HASH=${{ env.DATA_HASH }}' added to output dataset."

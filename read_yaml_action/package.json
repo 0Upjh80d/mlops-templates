@@ -1,0 +1,18 @@
+{
+  "name": "read_yaml_action",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "Wilsven Leong",
+  "license": "MIT",
+  "description": "",
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "fs": "^0.0.1-security",
+    "js-yaml": "^4.1.0"
+  }
+}
